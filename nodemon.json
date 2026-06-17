@@ -1,5 +1,7 @@
 {
-  "watch": ["api"],
-  "ext": "js",
-  "exec": "node api/server.js"
+  "watch": ["server.js", "api/db.js"],
+  "ext": "js,json",
+  "env": {
+    "PORT": "5000"
+  }
 }

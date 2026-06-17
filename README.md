@@ -22,3 +22,9 @@ npm run build
 ## 演示账号
 - 邮箱: demo@example.com
 - 密码: demo123
+
+## 部署（国内用户必读）
+
+**请勿使用 Vercel**（国内访问不稳定，且无法持久保存用户数据）。
+
+请阅读 [DEPLOY.md](./DEPLOY.md)，使用 **Zeabur** 部署，并选择 **香港/台湾** 区域。

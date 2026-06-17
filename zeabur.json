@@ -1,3 +1,11 @@
 {
-  "$schema": "https://discord.com/channels/993853220840894464/1027096396389777519"
+  "build": {
+    "command": "npm install && npm run build"
+  },
+  "deploy": {
+    "startCommand": "node server.js",
+    "env": {
+      "DATA_DIR": "/data"
+    }
+  }
 }

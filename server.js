@@ -4,91 +4,106 @@ import path from 'path';
 import { fileURLToPath } from 'url';
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import {
+  seedDemoData,
+  findUserByEmail,
+  findUserByUsername,
+  findUserById,
+  createUser,
+  getPublishedArticles,
+  getArticleById,
+  getArticlesByAuthor,
+  createArticle,
+  updateArticle,
+  deleteArticle,
+  getArticleAuthorId,
+  getFeeRecords,
+  getFeeBalance,
+  createFeeRecord,
+  deleteFeeRecord,
+} from './api/db.js';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-let users = [];
-let articles = [];
-let userIdCounter = 1;
-let articleIdCounter = 1;
-let initialized = false;
-
-const initializeData = async () => {
-  if (initialized) return;
-  
-  try {
-    const hashedPassword = await bcrypt.hash('demo123', 10);
-    const initialUser = {
-      id: `user_${userIdCounter++}`,
-      username: 'demo',
-      email: 'demo@example.com',
-      password: hashedPassword,
-      avatar: 'https://api.dicebear.com/7.x/avataaars/svg?seed=demo',
-      bio: '这是一个演示用户',
-      createdAt: new Date().toISOString(),
-    };
-    users.push(initialUser);
-
-    const initialArticle = {
-      id: `article_${articleIdCounter++}`,
-      title: '欢迎加入王耀庄家庭',
-      content: '<p>欢迎加入王耀庄大家庭！在这里，你可以自由地表达你的想法，分享你的故事。</p><p>我们提供了一个温馨的社区环境，让你与志同道合的朋友们一起成长。</p>',
-      summary: '欢迎加入王耀庄大家庭，开启你的精彩之旅。',
-      author: initialUser.id,
-      coverImage: '',
-      category: '其他',
-      tags: ['欢迎', '社区'],
-      status: 'published',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
-    articles.push(initialArticle);
-    
-    initialized = true;
-    console.log('Data initialized successfully');
-  } catch (error) {
-    console.error('Failed to initialize data:', error);
-  }
-};
+const JWT_SECRET = process.env.JWT_SECRET || 'secret-key-change-in-production';
 
 const app = express();
 
-// CORS配置
 app.use(cors({
   origin: '*',
   methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization']
+  allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 app.use(express.json({ limit: '10mb' }));
 
-// API路由
+function publicUser(user) {
+  return {
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    avatar: user.avatar,
+    bio: user.bio,
+  };
+}
+
+function getTokenFromRequest(req) {
+  return req.headers.authorization?.replace('Bearer ', '');
+}
+
+function verifyToken(token) {
+  return jwt.verify(token, JWT_SECRET);
+}
+
+app.get('/api/health', (_req, res) => {
+  res.json({ status: 'ok' });
+});
+
+app.get('/api/avatar/:seed', (req, res) => {
+  const seed = decodeURIComponent(req.params.seed || 'U');
+  const initial = seed.charAt(0).toUpperCase() || 'U';
+  const colors = ['#6366f1', '#8b5cf6', '#ec4899', '#f59e0b', '#10b981', '#3b82f6'];
+  const color = colors[initial.charCodeAt(0) % colors.length];
+
+  res.setHeader('Content-Type', 'image/svg+xml');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  res.send(
+    `<svg xmlns="http://www.w3.org/2000/svg" width="128" height="128" viewBox="0 0 128 128">` +
+    `<rect fill="${color}" width="128" height="128"/>` +
+    `<text x="64" y="72" text-anchor="middle" fill="white" font-size="52" font-family="sans-serif">${initial}</text>` +
+    `</svg>`
+  );
+});
+
 app.post('/api/auth/register', async (req, res) => {
   try {
     const { username, email, password } = req.body;
 
-    const existingUser = users.find(u => u.email === email || u.username === username);
-    if (existingUser) {
-      return res.status(400).json({ message: existingUser.email === email ? '该邮箱已被注册' : '该用户名已被使用' });
+    if (!username || !email || !password) {
+      return res.status(400).json({ message: '请填写完整信息' });
+    }
+
+    if (password.length < 6) {
+      return res.status(400).json({ message: '密码至少需要6个字符' });
+    }
+
+    const existingByEmail = findUserByEmail(email);
+    if (existingByEmail) {
+      return res.status(400).json({ message: '该邮箱已被注册' });
+    }
+
+    const existingByUsername = findUserByUsername(username);
+    if (existingByUsername) {
+      return res.status(400).json({ message: '该用户名已被使用' });
     }
 
     const hashedPassword = await bcrypt.hash(password, 10);
-    const user = {
-      id: `user_${userIdCounter++}`,
-      username,
-      email,
-      password: hashedPassword,
-      avatar: `https://api.dicebear.com/7.x/avataaars/svg?seed=${username}`,
-      bio: '',
-      createdAt: new Date().toISOString(),
-    };
-
-    users.push(user);
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'secret-key-change-in-production', { expiresIn: '7d' });
+    const user = createUser({ username, email, password: hashedPassword });
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
     res.status(201).json({
-      user: { id: user.id, username: user.username, email: user.email, avatar: user.avatar, bio: user.bio },
+      user: publicUser(user),
       token,
     });
   } catch (error) {
@@ -100,17 +115,26 @@ app.post('/api/auth/register', async (req, res) => {
 app.post('/api/auth/login', async (req, res) => {
   try {
     const { email, password } = req.body;
-    const user = users.find(u => u.email === email);
 
-    if (!user) return res.status(400).json({ message: '邮箱或密码错误' });
+    if (!email || !password) {
+      return res.status(400).json({ message: '请填写邮箱和密码' });
+    }
+
+    const user = findUserByEmail(email);
+
+    if (!user) {
+      return res.status(400).json({ message: '邮箱或密码错误' });
+    }
 
     const isMatch = await bcrypt.compare(password, user.password);
-    if (!isMatch) return res.status(400).json({ message: '邮箱或密码错误' });
+    if (!isMatch) {
+      return res.status(400).json({ message: '邮箱或密码错误' });
+    }
 
-    const token = jwt.sign({ userId: user.id }, process.env.JWT_SECRET || 'secret-key-change-in-production', { expiresIn: '7d' });
+    const token = jwt.sign({ userId: user.id }, JWT_SECRET, { expiresIn: '7d' });
 
     res.json({
-      user: { id: user.id, username: user.username, email: user.email, avatar: user.avatar, bio: user.bio },
+      user: publicUser(user),
       token,
     });
   } catch (error) {
@@ -120,40 +144,44 @@ app.post('/api/auth/login', async (req, res) => {
 });
 
 app.get('/api/auth/me', (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = getTokenFromRequest(req);
   if (!token) return res.status(401).json({ message: '未授权' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret-key-change-in-production');
-    const user = users.find(u => u.id === decoded.userId);
+    const decoded = verifyToken(token);
+    const user = findUserById(decoded.userId);
     if (!user) return res.status(404).json({ message: '用户不存在' });
 
-    res.json({ id: user.id, username: user.username, email: user.email, avatar: user.avatar, bio: user.bio });
+    res.json(user);
   } catch (error) {
     res.status(401).json({ message: 'token无效' });
   }
 });
 
-app.get('/api/articles', (req, res) => {
+app.get('/api/articles', (_req, res) => {
   try {
-    const publishedArticles = articles
-      .filter(a => a.status === 'published')
-      .map(a => ({ ...a, author: users.find(u => u.id === a.author) }))
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    res.json(publishedArticles);
+    res.json(getPublishedArticles());
   } catch (error) {
     console.error('Get articles error:', error);
     res.status(500).json({ message: '服务器错误' });
   }
 });
 
+app.get('/api/articles/user/:userId', (req, res) => {
+  try {
+    res.json(getArticlesByAuthor(req.params.userId));
+  } catch (error) {
+    console.error('Get user articles error:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
+});
+
 app.get('/api/articles/:id', (req, res) => {
   try {
-    const article = articles.find(a => a.id === req.params.id);
+    const article = getArticleById(req.params.id);
     if (!article) return res.status(404).json({ message: '文章不存在' });
 
-    res.json({ ...article, author: users.find(u => u.id === article.author) });
+    res.json(article);
   } catch (error) {
     console.error('Get article error:', error);
     res.status(500).json({ message: '服务器错误' });
@@ -161,29 +189,24 @@ app.get('/api/articles/:id', (req, res) => {
 });
 
 app.post('/api/articles', (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = getTokenFromRequest(req);
   if (!token) return res.status(401).json({ message: '未授权' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret-key-change-in-production');
+    const decoded = verifyToken(token);
     const { title, content, summary, category, tags, status } = req.body;
 
-    const article = {
-      id: `article_${articleIdCounter++}`,
+    const article = createArticle({
       title,
       content,
       summary,
-      author: decoded.userId,
-      coverImage: '',
-      category: category || '其他',
-      tags: tags || [],
-      status: status || 'published',
-      createdAt: new Date().toISOString(),
-      updatedAt: new Date().toISOString(),
-    };
+      authorId: decoded.userId,
+      category,
+      tags,
+      status,
+    });
 
-    articles.push(article);
-    res.status(201).json({ ...article, author: users.find(u => u.id === decoded.userId) });
+    res.status(201).json(article);
   } catch (error) {
     console.error('Create article error:', error);
     res.status(401).json({ message: 'token无效' });
@@ -191,26 +214,27 @@ app.post('/api/articles', (req, res) => {
 });
 
 app.put('/api/articles/:id', (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = getTokenFromRequest(req);
   if (!token) return res.status(401).json({ message: '未授权' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret-key-change-in-production');
-    const articleIndex = articles.findIndex(a => a.id === req.params.id);
+    const decoded = verifyToken(token);
+    const authorId = getArticleAuthorId(req.params.id);
 
-    if (articleIndex === -1) return res.status(404).json({ message: '文章不存在' });
-    if (articles[articleIndex].author !== decoded.userId) return res.status(403).json({ message: '无权编辑此文章' });
+    if (!authorId) return res.status(404).json({ message: '文章不存在' });
+    if (authorId !== decoded.userId) return res.status(403).json({ message: '无权编辑此文章' });
 
     const { title, content, summary, category, tags, status } = req.body;
-    articles[articleIndex] = {
-      ...articles[articleIndex],
-      title, content, summary, category,
-      tags: tags || [],
-      status: status || 'published',
-      updatedAt: new Date().toISOString(),
-    };
+    const article = updateArticle(req.params.id, {
+      title,
+      content,
+      summary,
+      category,
+      tags,
+      status,
+    });
 
-    res.json({ ...articles[articleIndex], author: users.find(u => u.id === decoded.userId) });
+    res.json(article);
   } catch (error) {
     console.error('Update article error:', error);
     res.status(401).json({ message: 'token无效' });
@@ -218,17 +242,17 @@ app.put('/api/articles/:id', (req, res) => {
 });
 
 app.delete('/api/articles/:id', (req, res) => {
-  const token = req.headers.authorization?.replace('Bearer ', '');
+  const token = getTokenFromRequest(req);
   if (!token) return res.status(401).json({ message: '未授权' });
 
   try {
-    const decoded = jwt.verify(token, process.env.JWT_SECRET || 'secret-key-change-in-production');
-    const articleIndex = articles.findIndex(a => a.id === req.params.id);
+    const decoded = verifyToken(token);
+    const authorId = getArticleAuthorId(req.params.id);
 
-    if (articleIndex === -1) return res.status(404).json({ message: '文章不存在' });
-    if (articles[articleIndex].author !== decoded.userId) return res.status(403).json({ message: '无权删除此文章' });
+    if (!authorId) return res.status(404).json({ message: '文章不存在' });
+    if (authorId !== decoded.userId) return res.status(403).json({ message: '无权删除此文章' });
 
-    articles.splice(articleIndex, 1);
+    deleteArticle(req.params.id);
     res.json({ message: '文章删除成功' });
   } catch (error) {
     console.error('Delete article error:', error);
@@ -236,28 +260,85 @@ app.delete('/api/articles/:id', (req, res) => {
   }
 });
 
-app.get('/api/articles/user/:userId', (req, res) => {
+app.get('/api/fee/records', (req, res) => {
   try {
-    const userArticles = articles
-      .filter(a => a.author === req.params.userId)
-      .map(a => ({ ...a, author: users.find(u => u.id === a.author) }))
-      .sort((a, b) => new Date(b.createdAt) - new Date(a.createdAt));
-
-    res.json(userArticles);
+    res.json(getFeeRecords());
   } catch (error) {
-    console.error('Get user articles error:', error);
+    console.error('Get fee records error:', error);
     res.status(500).json({ message: '服务器错误' });
   }
 });
 
-// 静态文件服务
-app.use(express.static(path.join(__dirname, '../dist')));
-app.get('*', (req, res) => {
-  res.sendFile(path.join(__dirname, '../dist/index.html'));
+app.get('/api/fee/balance', (req, res) => {
+  try {
+    res.json(getFeeBalance());
+  } catch (error) {
+    console.error('Get fee balance error:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
 });
 
-// 初始化并启动服务器
-initializeData().then(() => {
+app.post('/api/fee/records', (req, res) => {
+  try {
+    const { type, amount, source, purpose, operator } = req.body;
+
+    if (!type || !amount || !operator) {
+      return res.status(400).json({ message: '缺少必填字段' });
+    }
+
+    if (type !== 'deposit' && type !== 'withdraw') {
+      return res.status(400).json({ message: '类型必须是 deposit 或 withdraw' });
+    }
+
+    if (amount <= 0) {
+      return res.status(400).json({ message: '金额必须大于 0' });
+    }
+
+    const record = createFeeRecord({
+      type,
+      amount: parseFloat(amount),
+      source: type === 'deposit' ? source : '',
+      purpose: type === 'withdraw' ? purpose : '',
+      operator,
+    });
+
+    res.status(201).json(record);
+  } catch (error) {
+    console.error('Create fee record error:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
+});
+
+app.delete('/api/fee/records/:id', (req, res) => {
+  try {
+    const success = deleteFeeRecord(req.params.id);
+
+    if (!success) {
+      return res.status(404).json({ message: '记录不存在' });
+    }
+
+    res.json({ message: '删除成功' });
+  } catch (error) {
+    console.error('Delete fee record error:', error);
+    res.status(500).json({ message: '服务器错误' });
+  }
+});
+
+const distPath = path.join(__dirname, 'dist');
+app.use(express.static(distPath));
+
+app.get('*', (req, res, next) => {
+  if (req.path.startsWith('/api/')) {
+    return next();
+  }
+  res.sendFile(path.join(distPath, 'index.html'), (err) => {
+    if (err) {
+      res.status(404).json({ message: '页面不存在，请先运行 npm run build' });
+    }
+  });
+});
+
+seedDemoData().then(() => {
   const PORT = process.env.PORT || 3000;
   app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on port ${PORT}`);

@@ -43,6 +43,12 @@ export const Header = () => {
                 >
                   个人中心
                 </Link>
+                <Link
+                  to="/fee"
+                  className="text-gray-700 hover:text-primary-600 font-medium transition-colors"
+                >
+                  班费管理
+                </Link>
               </>
             )}
           </nav>
@@ -131,6 +137,13 @@ export const Header = () => {
                   onClick={() => setMobileMenuOpen(false)}
                 >
                   个人中心
+                </Link>
+                <Link
+                  to="/fee"
+                  className="block px-4 py-2 text-gray-700 hover:bg-gray-50 rounded-lg transition-colors"
+                  onClick={() => setMobileMenuOpen(false)}
+                >
+                  班费管理
                 </Link>
                 <button
                   onClick={() => {

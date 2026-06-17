@@ -1,41 +1,41 @@
-import { User, UserResponse, LoginRequest, RegisterRequest } from '../types/user';
+import { UserResponse, LoginRequest, RegisterRequest } from '../types/user';
+import { getNetworkErrorMessage, parseApiError } from '../lib/apiError';
 
-export const authService = {
-  login: async (credentials: LoginRequest): Promise<{ user: UserResponse; token: string }> => {
-    const response = await fetch('/api/auth/login', {
+async function requestAuth(
+  endpoint: string,
+  body: LoginRequest | RegisterRequest
+): Promise<{ user: UserResponse; token: string }> {
+  let response: Response;
+
+  try {
+    response = await fetch(endpoint, {
       method: 'POST',
       headers: {
         'Content-Type': 'application/json',
       },
-      body: JSON.stringify(credentials),
+      body: JSON.stringify(body),
     });
+  } catch (error) {
+    throw new Error(getNetworkErrorMessage(error));
+  }
 
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message);
-    }
+  if (!response.ok) {
+    throw new Error(await parseApiError(response));
+  }
 
-    const data = await response.json();
+  return response.json();
+}
+
+export const authService = {
+  login: async (credentials: LoginRequest): Promise<{ user: UserResponse; token: string }> => {
+    const data = await requestAuth('/api/auth/login', credentials);
     localStorage.setItem('token', data.token);
     localStorage.setItem('user', JSON.stringify(data.user));
     return data;
   },
 
   register: async (userData: RegisterRequest): Promise<{ user: UserResponse; token: string }> => {
-    const response = await fetch('/api/auth/register', {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-      },
-      body: JSON.stringify(userData),
-    });
-
-    if (!response.ok) {
-      const error = await response.json();
-      throw new Error(error.message);
-    }
-
-    const data = await response.json();
+    const data = await requestAuth('/api/auth/register', userData);
     localStorage.setItem('token', data.token);
     localStorage.setItem('user', JSON.stringify(data.user));
     return data;
@@ -49,10 +49,39 @@ export const authService = {
   getCurrentUser: (): UserResponse | null => {
     const userStr = localStorage.getItem('user');
     if (!userStr) return null;
-    return JSON.parse(userStr);
+    try {
+      return JSON.parse(userStr);
+    } catch {
+      return null;
+    }
   },
 
   getToken: (): string | null => {
     return localStorage.getItem('token');
+  },
+
+  validateSession: async (): Promise<UserResponse | null> => {
+    const token = authService.getToken();
+    if (!token) return null;
+
+    let response: Response;
+    try {
+      response = await fetch('/api/auth/me', {
+        headers: {
+          Authorization: `Bearer ${token}`,
+        },
+      });
+    } catch {
+      return authService.getCurrentUser();
+    }
+
+    if (!response.ok) {
+      authService.logout();
+      return null;
+    }
+
+    const user = await response.json();
+    localStorage.setItem('user', JSON.stringify(user));
+    return user;
   },
 };

@@ -6,18 +6,39 @@ interface AuthState {
   user: UserResponse | null;
   isAuthenticated: boolean;
   loading: boolean;
+  initializing: boolean;
   error: string | null;
   login: (credentials: LoginRequest) => Promise<void>;
   register: (userData: RegisterRequest) => Promise<void>;
   logout: () => void;
   clearError: () => void;
+  initAuth: () => Promise<void>;
 }
 
 export const useAuthStore = create<AuthState>((set) => ({
   user: authService.getCurrentUser(),
   isAuthenticated: !!authService.getCurrentUser(),
   loading: false,
+  initializing: true,
   error: null,
+
+  initAuth: async () => {
+    set({ initializing: true });
+    try {
+      const user = await authService.validateSession();
+      set({
+        user,
+        isAuthenticated: !!user,
+        initializing: false,
+      });
+    } catch {
+      set({
+        user: null,
+        isAuthenticated: false,
+        initializing: false,
+      });
+    }
+  },
 
   login: async (credentials: LoginRequest) => {
     set({ loading: true, error: null });

@@ -1,5 +1,6 @@
 import bcrypt from 'bcryptjs';
 import jwt from 'jsonwebtoken';
+import { getFeeRecords, getFeeBalance, createFeeRecord, deleteFeeRecord } from './db.js';
 
 let users = [];
 let articles = [];
@@ -340,6 +341,72 @@ export default async function handler(req, res) {
       res.json(userArticles);
     } catch (error) {
       console.error('Get user articles error:', error);
+      res.status(500).json({ message: '服务器错误' });
+    }
+  }
+
+  else if (pathname === '/api/fee/records' && req.method === 'GET') {
+    try {
+      const records = getFeeRecords();
+      res.json(records);
+    } catch (error) {
+      console.error('Get fee records error:', error);
+      res.status(500).json({ message: '服务器错误' });
+    }
+  }
+
+  else if (pathname === '/api/fee/balance' && req.method === 'GET') {
+    try {
+      res.json(getFeeBalance());
+    } catch (error) {
+      console.error('Get fee balance error:', error);
+      res.status(500).json({ message: '服务器错误' });
+    }
+  }
+
+  else if (pathname === '/api/fee/records' && req.method === 'POST') {
+    try {
+      const { type, amount, source, purpose, operator } = req.body;
+
+      if (!type || !amount || !operator) {
+        return res.status(400).json({ message: '缺少必填字段' });
+      }
+
+      if (type !== 'deposit' && type !== 'withdraw') {
+        return res.status(400).json({ message: '类型必须是 deposit 或 withdraw' });
+      }
+
+      if (amount <= 0) {
+        return res.status(400).json({ message: '金额必须大于 0' });
+      }
+
+      const record = createFeeRecord({
+        type,
+        amount: parseFloat(amount),
+        source: type === 'deposit' ? source : '',
+        purpose: type === 'withdraw' ? purpose : '',
+        operator,
+      });
+
+      res.status(201).json(record);
+    } catch (error) {
+      console.error('Create fee record error:', error);
+      res.status(500).json({ message: '服务器错误' });
+    }
+  }
+
+  else if (pathname.startsWith('/api/fee/records/') && req.method === 'DELETE') {
+    try {
+      const id = pathname.split('/')[4];
+      const success = deleteFeeRecord(id);
+
+      if (!success) {
+        return res.status(404).json({ message: '记录不存在' });
+      }
+
+      res.json({ message: '删除成功' });
+    } catch (error) {
+      console.error('Delete fee record error:', error);
       res.status(500).json({ message: '服务器错误' });
     }
   }
