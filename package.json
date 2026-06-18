@@ -17,7 +17,6 @@
     "check": "tsc -b --noEmit"
   },
   "dependencies": {
-    "@cloudbase/node-sdk": "^3.18.3",
     "@types/react-router-dom": "^5.3.3",
     "@upstash/redis": "^1.38.0",
     "@vercel/kv": "^3.0.0",
