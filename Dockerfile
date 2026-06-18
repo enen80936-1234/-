@@ -11,6 +11,8 @@ RUN npm install
 COPY . .
 RUN npm run build
 
+# CloudBase 环境变量
+ENV TCB_ENV=wangjiansheng-d9gtp0u2e6b3
 ENV DATA_DIR=/data
 ENV PORT=80
 
