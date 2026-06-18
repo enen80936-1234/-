@@ -1,68 +1,73 @@
+import Database from 'better-sqlite3';
+import path from 'path';
+import fs from 'fs';
+import { fileURLToPath } from 'url';
 import bcrypt from 'bcryptjs';
-import { CloudBase } from '@cloudbase/node-sdk';
 
-let db = null;
-let tcb = null;
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = path.dirname(__filename);
 
-async function initCloudBase() {
-  if (tcb) return;
-  
-  try {
-    tcb = new CloudBase({
-      env: process.env.TCB_ENV || 'wangjiansheng-d9gtp0u2e6b3',
-    });
-    db = tcb.database();
-    await db.collection('users').get().catch(() => {});
-    console.log('CloudBase initialized successfully');
-  } catch (error) {
-    console.error('Failed to initialize CloudBase:', error);
-    throw error;
-  }
+const dataDir = process.env.DATA_DIR || path.join(__dirname, '..', 'data');
+if (!fs.existsSync(dataDir)) {
+  fs.mkdirSync(dataDir, { recursive: true });
 }
 
-async function ensureCollection(name) {
-  await initCloudBase();
-  try {
-    await db.createCollection(name);
-  } catch (e) {
-    if (!e.message.includes('already exists')) {
-      throw e;
-    }
-  }
-}
+const db = new Database(path.join(dataDir, 'app.db'));
+db.pragma('journal_mode = WAL');
 
-async function createTables() {
-  await ensureCollection('users');
-  await ensureCollection('articles');
-  await ensureCollection('fee_records');
-  await ensureCollection('counters');
-}
+db.exec(`
+  CREATE TABLE IF NOT EXISTS users (
+    id TEXT PRIMARY KEY,
+    username TEXT NOT NULL UNIQUE,
+    email TEXT NOT NULL UNIQUE,
+    password TEXT NOT NULL,
+    avatar TEXT NOT NULL,
+    bio TEXT DEFAULT '',
+    created_at TEXT NOT NULL
+  );
 
-createTables().catch(console.error);
+  CREATE TABLE IF NOT EXISTS articles (
+    id TEXT PRIMARY KEY,
+    title TEXT NOT NULL,
+    content TEXT NOT NULL,
+    summary TEXT DEFAULT '',
+    author_id TEXT NOT NULL,
+    cover_image TEXT DEFAULT '',
+    category TEXT DEFAULT '其他',
+    tags TEXT DEFAULT '[]',
+    status TEXT DEFAULT 'published',
+    created_at TEXT NOT NULL,
+    updated_at TEXT NOT NULL,
+    FOREIGN KEY (author_id) REFERENCES users(id)
+  );
 
-async function getCounter(name) {
-  await initCloudBase();
-  const res = await db.collection('counters').where({ name }).get();
-  return res.data.length > 0 ? res.data[0].value : 1;
-}
+  CREATE TABLE IF NOT EXISTS counters (
+    name TEXT PRIMARY KEY,
+    value INTEGER NOT NULL DEFAULT 1
+  );
 
-async function setCounter(name, value) {
-  await initCloudBase();
-  const res = await db.collection('counters').where({ name }).get();
-  if (res.data.length > 0) {
-    await db.collection('counters').where({ name }).update({ value });
-  } else {
-    await db.collection('counters').add({ name, value });
-  }
-}
+  CREATE TABLE IF NOT EXISTS fee_records (
+    id TEXT PRIMARY KEY,
+    type TEXT NOT NULL,
+    amount REAL NOT NULL,
+    source TEXT DEFAULT '',
+    purpose TEXT DEFAULT '',
+    operator TEXT NOT NULL,
+    created_at TEXT NOT NULL
+  );
+`);
 
-async function nextId(prefix) {
-  const value = await getCounter(prefix);
-  await setCounter(prefix, value + 1);
+const getCounter = db.prepare('SELECT value FROM counters WHERE name = ?');
+const setCounter = db.prepare('INSERT INTO counters (name, value) VALUES (?, ?) ON CONFLICT(name) DO UPDATE SET value = excluded.value');
+
+function nextId(prefix) {
+  const row = getCounter.get(prefix);
+  const value = row ? row.value : 1;
+  setCounter.run(prefix, value + 1);
   return `${prefix}_${value}`;
 }
 
-function getAvatarUrl(username) {
+export function getAvatarUrl(username) {
   return `/api/avatar/${encodeURIComponent(username)}`;
 }
 
@@ -74,8 +79,8 @@ function rowToUser(row) {
     email: row.email,
     password: row.password,
     avatar: row.avatar,
-    bio: row.bio || '',
-    createdAt: row.createdAt || row.created_at || new Date().toISOString(),
+    bio: row.bio,
+    createdAt: row.created_at,
   };
 }
 
@@ -91,43 +96,44 @@ function rowToArticle(row, author) {
     id: row.id,
     title: row.title,
     content: row.content,
-    summary: row.summary || '',
+    summary: row.summary,
     author: author || row.author_id,
-    coverImage: row.coverImage || row.cover_image || '',
-    category: row.category || '其他',
-    tags: row.tags || [],
-    status: row.status || 'published',
-    createdAt: row.createdAt || row.created_at || new Date().toISOString(),
-    updatedAt: row.updatedAt || row.updated_at || new Date().toISOString(),
+    coverImage: row.cover_image,
+    category: row.category,
+    tags: JSON.parse(row.tags || '[]'),
+    status: row.status,
+    createdAt: row.created_at,
+    updatedAt: row.updated_at,
   };
 }
 
-export async function findUserByEmail(email) {
-  await initCloudBase();
-  const res = await db.collection('users').where({ email: email.toLowerCase().trim() }).get();
-  return res.data.length > 0 ? rowToUser(res.data[0]) : null;
+const findUserByEmailStmt = db.prepare('SELECT * FROM users WHERE email = ?');
+const findUserByUsernameStmt = db.prepare('SELECT * FROM users WHERE username = ?');
+const findUserByIdStmt = db.prepare('SELECT * FROM users WHERE id = ?');
+const insertUserStmt = db.prepare(`
+  INSERT INTO users (id, username, email, password, avatar, bio, created_at)
+  VALUES (@id, @username, @email, @password, @avatar, @bio, @created_at)
+`);
+
+export function findUserByEmail(email) {
+  return rowToUser(findUserByEmailStmt.get(email.toLowerCase().trim()));
 }
 
-export async function findUserByUsername(username) {
-  await initCloudBase();
-  const res = await db.collection('users').where({ username: username.trim() }).get();
-  return res.data.length > 0 ? rowToUser(res.data[0]) : null;
+export function findUserByUsername(username) {
+  return rowToUser(findUserByUsernameStmt.get(username.trim()));
 }
 
-export async function findUserById(id) {
-  await initCloudBase();
-  const res = await db.collection('users').doc(id).get();
-  return res.data ? rowToPublicUser(res.data) : null;
+export function findUserById(id) {
+  return rowToPublicUser(findUserByIdStmt.get(id));
 }
 
-export async function createUser({ username, email, password }) {
-  await initCloudBase();
+export function createUser({ username, email, password }) {
   const normalizedEmail = email.toLowerCase().trim();
   const normalizedUsername = username.trim();
   const now = new Date().toISOString();
 
   const user = {
-    id: await nextId('user'),
+    id: nextId('user'),
     username: normalizedUsername,
     email: normalizedEmail,
     password,
@@ -136,95 +142,111 @@ export async function createUser({ username, email, password }) {
     createdAt: now,
   };
 
-  await db.collection('users').add(user);
+  insertUserStmt.run({
+    id: user.id,
+    username: user.username,
+    email: user.email,
+    password: user.password,
+    avatar: user.avatar,
+    bio: user.bio,
+    created_at: user.createdAt,
+  });
 
   return user;
 }
 
-export async function getPublishedArticles() {
-  await initCloudBase();
-  const res = await db.collection('articles').where({ status: 'published' }).orderBy('createdAt', 'desc').get();
-  
-  const articles = [];
-  for (const article of res.data) {
-    const author = await findUserById(article.author_id);
-    articles.push(rowToArticle(article, author));
-  }
-  
-  return articles;
+const publishedArticlesStmt = db.prepare(`
+  SELECT * FROM articles WHERE status = 'published' ORDER BY created_at DESC
+`);
+const articleByIdStmt = db.prepare('SELECT * FROM articles WHERE id = ?');
+const articlesByAuthorStmt = db.prepare(`
+  SELECT * FROM articles WHERE author_id = ? ORDER BY created_at DESC
+`);
+const insertArticleStmt = db.prepare(`
+  INSERT INTO articles (
+    id, title, content, summary, author_id, cover_image, category, tags, status, created_at, updated_at
+  ) VALUES (
+    @id, @title, @content, @summary, @author_id, @cover_image, @category, @tags, @status, @created_at, @updated_at
+  )
+`);
+const updateArticleStmt = db.prepare(`
+  UPDATE articles SET
+    title = @title,
+    content = @content,
+    summary = @summary,
+    category = @category,
+    tags = @tags,
+    status = @status,
+    updated_at = @updated_at
+  WHERE id = @id
+`);
+const deleteArticleStmt = db.prepare('DELETE FROM articles WHERE id = ?');
+
+function attachAuthor(articleRow) {
+  const author = findUserById(articleRow.author_id);
+  return rowToArticle(articleRow, author);
 }
 
-export async function getArticleById(id) {
-  await initCloudBase();
-  const res = await db.collection('articles').doc(id).get();
-  if (!res.data) return null;
-  
-  const author = await findUserById(res.data.author_id);
-  return rowToArticle(res.data, author);
+export function getPublishedArticles() {
+  return publishedArticlesStmt.all().map(attachAuthor);
 }
 
-export async function getArticlesByAuthor(userId) {
-  await initCloudBase();
-  const res = await db.collection('articles').where({ author_id: userId }).orderBy('createdAt', 'desc').get();
-  
-  const articles = [];
-  for (const article of res.data) {
-    const author = await findUserById(userId);
-    articles.push(rowToArticle(article, author));
-  }
-  
-  return articles;
+export function getArticleById(id) {
+  const row = articleByIdStmt.get(id);
+  if (!row) return null;
+  return attachAuthor(row);
 }
 
-export async function createArticle({ title, content, summary, authorId, category, tags, status }) {
-  await initCloudBase();
+export function getArticlesByAuthor(userId) {
+  return articlesByAuthorStmt.all(userId).map(attachAuthor);
+}
+
+export function createArticle({ title, content, summary, authorId, category, tags, status }) {
   const now = new Date().toISOString();
   const article = {
-    id: await nextId('article'),
+    id: nextId('article'),
     title,
     content,
     summary,
     author_id: authorId,
     cover_image: '',
     category: category || '其他',
-    tags: tags || [],
+    tags: JSON.stringify(tags || []),
     status: status || 'published',
-    createdAt: now,
-    updatedAt: now,
+    created_at: now,
+    updated_at: now,
   };
 
-  await db.collection('articles').add(article);
+  insertArticleStmt.run(article);
   return getArticleById(article.id);
 }
 
-export async function updateArticle(id, { title, content, summary, category, tags, status }) {
-  await initCloudBase();
-  const existing = await db.collection('articles').doc(id).get();
-  if (!existing.data) return null;
+export function updateArticle(id, { title, content, summary, category, tags, status }) {
+  const existing = articleByIdStmt.get(id);
+  if (!existing) return null;
 
-  await db.collection('articles').doc(id).update({
+  updateArticleStmt.run({
+    id,
     title,
     content,
     summary,
     category,
-    tags: tags || [],
+    tags: JSON.stringify(tags || []),
     status: status || 'published',
-    updatedAt: new Date().toISOString(),
+    updated_at: new Date().toISOString(),
   });
 
   return getArticleById(id);
 }
 
-export async function deleteArticle(id) {
-  await initCloudBase();
-  await db.collection('articles').doc(id).remove();
-  return true;
+export function deleteArticle(id) {
+  const result = deleteArticleStmt.run(id);
+  return result.changes > 0;
 }
 
-export async function getArticleAuthorId(id) {
-  await initCloudBase();
-  const res = await db.collection('articles').doc(id).get();
-  return res.data ? res.data.author_id : null;
+export function getArticleAuthorId(id) {
+  const row = articleByIdStmt.get(id);
+  return row ? row.author_id : null;
 }
 
 function rowToFeeRecord(row) {
@@ -232,84 +254,82 @@ function rowToFeeRecord(row) {
     id: row.id,
     type: row.type,
     amount: row.amount,
-    source: row.source || '',
-    purpose: row.purpose || '',
+    source: row.source,
+    purpose: row.purpose,
     operator: row.operator,
-    createdAt: row.createdAt || row.created_at || new Date().toISOString(),
+    createdAt: row.created_at,
   };
 }
 
-export async function getFeeRecords() {
-  await initCloudBase();
-  const res = await db.collection('fee_records').orderBy('createdAt', 'desc').get();
-  return res.data.map(rowToFeeRecord);
+const getFeeRecordsStmt = db.prepare(`
+  SELECT * FROM fee_records ORDER BY created_at DESC
+`);
+const getFeeRecordByIdStmt = db.prepare('SELECT * FROM fee_records WHERE id = ?');
+const insertFeeRecordStmt = db.prepare(`
+  INSERT INTO fee_records (id, type, amount, source, purpose, operator, created_at)
+  VALUES (@id, @type, @amount, @source, @purpose, @operator, @created_at)
+`);
+const deleteFeeRecordStmt = db.prepare('DELETE FROM fee_records WHERE id = ?');
+const getTotalBalanceStmt = db.prepare(`
+  SELECT 
+    COALESCE(SUM(CASE WHEN type = 'deposit' THEN amount ELSE 0 END), 0) as total_deposit,
+    COALESCE(SUM(CASE WHEN type = 'withdraw' THEN amount ELSE 0 END), 0) as total_withdraw
+  FROM fee_records
+`);
+
+export function getFeeRecords() {
+  return getFeeRecordsStmt.all().map(rowToFeeRecord);
 }
 
-export async function getFeeRecordById(id) {
-  await initCloudBase();
-  const res = await db.collection('fee_records').doc(id).get();
-  return res.data ? rowToFeeRecord(res.data) : null;
+export function getFeeRecordById(id) {
+  const row = getFeeRecordByIdStmt.get(id);
+  return row ? rowToFeeRecord(row) : null;
 }
 
-export async function createFeeRecord({ type, amount, source, purpose, operator }) {
-  await initCloudBase();
+export function createFeeRecord({ type, amount, source, purpose, operator }) {
   const now = new Date().toISOString();
   const record = {
-    id: await nextId('fee'),
+    id: nextId('fee'),
     type,
     amount,
     source: source || '',
     purpose: purpose || '',
     operator,
-    createdAt: now,
+    created_at: now,
   };
 
-  await db.collection('fee_records').add(record);
+  insertFeeRecordStmt.run(record);
   return getFeeRecordById(record.id);
 }
 
-export async function deleteFeeRecord(id) {
-  await initCloudBase();
-  await db.collection('fee_records').doc(id).remove();
-  return true;
+export function deleteFeeRecord(id) {
+  const result = deleteFeeRecordStmt.run(id);
+  return result.changes > 0;
 }
 
-export async function getFeeBalance() {
-  await initCloudBase();
-  const res = await db.collection('fee_records').get();
-  
-  let totalDeposit = 0;
-  let totalWithdraw = 0;
-  
-  for (const record of res.data) {
-    if (record.type === 'deposit') {
-      totalDeposit += record.amount;
-    } else if (record.type === 'withdraw') {
-      totalWithdraw += record.amount;
-    }
-  }
-  
+export function getFeeBalance() {
+  const row = getTotalBalanceStmt.get();
   return {
-    totalDeposit,
-    totalWithdraw,
-    balance: totalDeposit - totalWithdraw,
+    totalDeposit: row.total_deposit,
+    totalWithdraw: row.total_withdraw,
+    balance: row.total_deposit - row.total_withdraw,
   };
 }
 
 export async function seedDemoData() {
-  const demoUser = await findUserByEmail('demo@example.com');
+  const demoUser = findUserByEmail('demo@example.com');
   if (demoUser) return;
 
   const hashedPassword = await bcrypt.hash('demo123', 10);
-  const user = await createUser({
+  const user = createUser({
     username: 'demo',
     email: 'demo@example.com',
     password: hashedPassword,
   });
 
-  await db.collection('users').doc(user.id).update({ bio: '这是一个演示用户' });
+  db.prepare('UPDATE users SET bio = ? WHERE id = ?').run('这是一个演示用户', user.id);
 
-  await createArticle({
+  createArticle({
     title: '欢迎加入王耀庄家庭',
     content: '<p>欢迎加入王耀庄大家庭！在这里，你可以自由地表达你的想法，分享你的故事。</p><p>我们提供了一个温馨的社区环境，让你与志同道合的朋友们一起成长。</p>',
     summary: '欢迎加入王耀庄大家庭，开启你的精彩之旅。',
