@@ -7,11 +7,13 @@ interface VideoFile {
   name: string;
   size: string;
   duration: string;
-  file: File;
+  file: File | null;
   url: string;
 }
 
 const playbackRates = [0.5, 0.75, 1, 1.25, 1.5, 2];
+
+const isElectron = (window as any).electronAPI !== undefined;
 
 export default function VideoPlayer() {
   const [videoFiles, setVideoFiles] = useState<VideoFile[]>([]);
@@ -65,6 +67,38 @@ export default function VideoPlayer() {
     setVideoFiles(prev => [...prev, ...newVideos]);
     if (newVideos.length > 0 && !currentVideo) {
       setCurrentVideo(newVideos[0]);
+    }
+  };
+
+  const handleElectronFileSelect = async () => {
+    if (!isElectron || !(window as any).electronAPI) return;
+    
+    try {
+      const filePaths = await (window as any).electronAPI.openVideoDialog();
+      if (!filePaths || filePaths.length === 0) return;
+
+      const newVideos: VideoFile[] = [];
+      for (let i = 0; i < filePaths.length; i++) {
+        const filePath = filePaths[i];
+        const url = `file://${filePath}`;
+        const fileName = filePath.split(/[\\/]/).pop() || '未知文件';
+        
+        newVideos.push({
+          id: Date.now() + i,
+          name: fileName,
+          size: '本地文件',
+          duration: '00:00',
+          file: null,
+          url,
+        });
+      }
+
+      setVideoFiles(prev => [...prev, ...newVideos]);
+      if (newVideos.length > 0 && !currentVideo) {
+        setCurrentVideo(newVideos[0]);
+      }
+    } catch (error) {
+      console.error('文件选择失败:', error);
     }
   };
 
@@ -211,7 +245,7 @@ export default function VideoPlayer() {
             </div>
             
             <button
-              onClick={() => fileInputRef.current?.click()}
+              onClick={isElectron ? handleElectronFileSelect : () => fileInputRef.current?.click()}
               className="w-full py-3 px-4 bg-blue-600 hover:bg-blue-700 rounded-lg flex items-center justify-center gap-2 transition-colors"
             >
               <FileVideo className="w-5 h-5" />
