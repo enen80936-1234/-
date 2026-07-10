@@ -10,6 +10,7 @@ import { ArticleDetail } from "./pages/ArticleDetail";
 import { Profile } from "./pages/Profile";
 import { Contact } from "./pages/Contact";
 import FeeManagement from "./pages/FeeManagement";
+import VideoPlayer from "./pages/VideoPlayer";
 import { useAuthStore } from "./stores/authStore";
 
 const ProtectedRoute = ({ children }: { children: React.ReactNode }) => {
@@ -71,6 +72,7 @@ export default function App() {
           />
           <Route path="contact" element={<Contact />} />
           <Route path="fee" element={<FeeManagement />} />
+          <Route path="video" element={<VideoPlayer />} />
         </Route>
       </Routes>
     </Router>
